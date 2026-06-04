@@ -1,5 +1,9 @@
 import { useState, useRef } from "react"
+import dynamic from "next/dynamic"
 import Head from "next/head"
+
+// Carga dinámica: zxing solo funciona en el browser, no en SSR
+const Escaner = dynamic(() => import("../components/Escaner"), { ssr: false })
 
 // ─── Formatear precio CLP ────────────────────────────────
 function formatPrecio(valor) {
@@ -54,10 +58,11 @@ function Chip({ label, valor }) {
 
 // ─── Página principal ────────────────────────────────────
 export default function Home() {
-  const [sku,      setSku]      = useState("")
-  const [estado,   setEstado]   = useState("idle")   // idle | cargando | ok | error
-  const [producto, setProducto] = useState(null)
-  const [error,    setError]    = useState("")
+  const [sku,        setSku]        = useState("")
+  const [estado,     setEstado]     = useState("idle")
+  const [producto,   setProducto]   = useState(null)
+  const [error,      setError]      = useState("")
+  const [escaneando, setEscaneando] = useState(false)
   const inputRef = useRef(null)
 
   async function buscar(skuOverride) {
@@ -89,11 +94,18 @@ export default function Home() {
     if (e.key === "Enter") buscar()
   }
 
+  function onDetectado(codigoEscaneado) {
+    setEscaneando(false)
+    setSku(codigoEscaneado)
+    buscar(codigoEscaneado)
+  }
+
   function limpiar() {
     setSku("")
     setEstado("idle")
     setProducto(null)
     setError("")
+    setEscaneando(false)
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
@@ -139,6 +151,17 @@ export default function Home() {
                 autoFocus
                 autoComplete="off"
               />
+              <button
+                style={styles.btnCamara}
+                onClick={() => setEscaneando(true)}
+                title="Escanear código de barras"
+                aria-label="Abrir cámara para escanear"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+              </button>
               <button
                 style={{
                   ...styles.btnBuscar,
@@ -188,6 +211,14 @@ export default function Home() {
         <footer style={styles.footer}>
           <span>consulta en tiempo real · api ripley</span>
         </footer>
+
+        {/* ── Escaner overlay ── */}
+        {escaneando && (
+          <Escaner
+            onDetectado={onDetectado}
+            onCerrar={() => setEscaneando(false)}
+          />
+        )}
       </div>
 
       <style>{`
@@ -277,6 +308,19 @@ const styles = {
     fontSize: 20,
     letterSpacing: 3,
     padding: "14px 16px",
+    transition: "border-color 0.15s",
+  },
+  btnCamara: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--accent)",
+    padding: "0 16px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
     transition: "border-color 0.15s",
   },
   btnBuscar: {
