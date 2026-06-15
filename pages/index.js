@@ -1,8 +1,19 @@
-import { useState, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import Head from "next/head"
 
 const Escaner = dynamic(() => import("../components/Escaner"), { ssr: false })
+const TIENDA_STORAGE_KEY = "ripley-precios-tienda"
+
+const TAMANOS_POP = [
+  { id: 1, nombre: "4x10" },
+  { id: 2, nombre: "10x11" },
+  { id: 3, nombre: "13x19" },
+  { id: 4, nombre: "20x22" },
+  { id: 5, nombre: "22x8" },
+  { id: 6, nombre: "vitrina" },
+  { id: 8, nombre: "20x19" },
+]
 
 function formatPrecio(valor) {
   if (!valor) return "-"
@@ -13,10 +24,45 @@ function formatPrecio(valor) {
   }).format(valor)
 }
 
-function TarjetaProducto({ producto }) {
+function TarjetaProducto({ producto, tienda }) {
+  const [formAbierto, setFormAbierto] = useState(false)
+  const [tamanoId, setTamanoId] = useState(TAMANOS_POP[0].id)
+  const [cantidad, setCantidad] = useState(1)
+  const [comentario, setComentario] = useState("")
+  const [estadoSolicitud, setEstadoSolicitud] = useState("idle")
+  const [errorSolicitud, setErrorSolicitud] = useState("")
   const mostrarPrecioTarjeta =
     producto.precioTarjetaRipley &&
     producto.precioTarjetaRipley !== producto.precio
+
+  async function solicitarPop() {
+    setEstadoSolicitud("cargando")
+    setErrorSolicitud("")
+
+    try {
+      const res = await fetch("/api/solicitudes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          producto,
+          tamano_id: tamanoId,
+          tienda: tienda.id,
+          cantidad,
+          comentario,
+        }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || "No se pudo crear la solicitud")
+      }
+
+      setEstadoSolicitud("ok")
+    } catch (err) {
+      setErrorSolicitud(err.message || "No se pudo crear la solicitud")
+      setEstadoSolicitud("error")
+    }
+  }
 
   return (
     <div style={styles.tarjeta}>
@@ -50,7 +96,161 @@ function TarjetaProducto({ producto }) {
         <span style={styles.eanLabel}>EAN13</span>
         <span style={styles.eanValor}>{producto.sku}</span>
       </div>
+
+      <div style={styles.popBloque}>
+        {!formAbierto && estadoSolicitud !== "ok" && (
+          <button style={styles.btnPop} onClick={() => setFormAbierto(true)}>
+            SOLICITAR POP
+          </button>
+        )}
+
+        {formAbierto && estadoSolicitud !== "ok" && (
+          <div style={styles.popForm}>
+            <div style={styles.formGrid}>
+              <label style={styles.field}>
+                <span style={styles.fieldLabel}>Tamano</span>
+                <select
+                  style={styles.select}
+                  value={tamanoId}
+                  onChange={e => setTamanoId(Number(e.target.value))}
+                  disabled={estadoSolicitud === "cargando"}
+                >
+                  {TAMANOS_POP.map(tamano => (
+                    <option key={tamano.id} value={tamano.id}>
+                      {tamano.nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={styles.field}>
+                <span style={styles.fieldLabel}>Cantidad</span>
+                <input
+                  style={styles.cantidadInput}
+                  type="number"
+                  min="1"
+                  max="99"
+                  value={cantidad}
+                  onChange={e => setCantidad(Math.max(1, Number(e.target.value || 1)))}
+                  disabled={estadoSolicitud === "cargando"}
+                />
+              </label>
+            </div>
+
+            <label style={styles.field}>
+              <span style={styles.fieldLabel}>Comentario</span>
+              <input
+                style={styles.comentarioInput}
+                type="text"
+                maxLength={60}
+                value={comentario}
+                onChange={e => setComentario(e.target.value.slice(0, 60))}
+                placeholder="Opcional"
+                disabled={estadoSolicitud === "cargando"}
+              />
+              <span style={styles.contadorComentario}>{comentario.length} / 60</span>
+            </label>
+
+            {estadoSolicitud === "error" && (
+              <p style={styles.errorSolicitud}>{errorSolicitud}</p>
+            )}
+
+            <div style={styles.formActions}>
+              <button
+                style={styles.btnSecundario}
+                onClick={() => setFormAbierto(false)}
+                disabled={estadoSolicitud === "cargando"}
+              >
+                Cancelar
+              </button>
+              <button
+                style={{
+                  ...styles.btnConfirmarPop,
+                  ...(estadoSolicitud === "cargando" ? styles.btnDisabled : {}),
+                }}
+                onClick={solicitarPop}
+                disabled={estadoSolicitud === "cargando"}
+              >
+                {estadoSolicitud === "cargando" ? "ENVIANDO..." : "CONFIRMAR"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {estadoSolicitud === "ok" && (
+          <div style={styles.solicitudOk}>Solicitud POP registrada</div>
+        )}
+      </div>
     </div>
+  )
+}
+
+function SelectorTienda({ tiendas, cargando, error, tiendaElegida, onElegir, onRecargar }) {
+  const [tiendaId, setTiendaId] = useState("")
+
+  useEffect(() => {
+    if (!tiendaId && tiendas.length > 0) {
+      setTiendaId(String(tiendas[0].id))
+    }
+  }, [tiendas, tiendaId])
+
+  function confirmar() {
+    const tienda = tiendas.find(item => String(item.id) === String(tiendaId))
+    if (tienda) onElegir(tienda)
+  }
+
+  return (
+    <main style={styles.welcomeMain}>
+      <div style={styles.welcomeBox}>
+        <span style={styles.welcomeEyebrow}>Consulta precios</span>
+        <h1 style={styles.welcomeTitle}>Bienvenid@</h1>
+        <p style={styles.welcomeText}>Que tienda desea consultar?</p>
+
+        {cargando && (
+          <div style={styles.estadoBloque}>
+            <span style={styles.spinner} />
+            <span style={styles.estadoTexto}>cargando tiendas...</span>
+          </div>
+        )}
+
+        {error && (
+          <div style={styles.errorBloque}>
+            <p style={styles.errorTexto}>{error}</p>
+            <button style={styles.btnLimpiar} onClick={onRecargar}>Reintentar</button>
+          </div>
+        )}
+
+        {!cargando && !error && (
+          <>
+            <label style={styles.field}>
+              <span style={styles.fieldLabel}>Tienda</span>
+              <select
+                style={styles.selectGrande}
+                value={tiendaId}
+                onChange={e => setTiendaId(e.target.value)}
+              >
+                {tiendas.map(tienda => (
+                  <option key={tienda.id} value={tienda.id}>
+                    {tienda.descripcion}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              style={{
+                ...styles.btnEntrar,
+                ...(tiendaElegida ? {} : {}),
+              }}
+              onClick={confirmar}
+              disabled={!tiendaId}
+            >
+              Entrar
+            </button>
+          </>
+        )}
+      </div>
+    </main>
   )
 }
 
@@ -60,18 +260,89 @@ export default function Home() {
   const [producto, setProducto] = useState(null)
   const [error, setError] = useState("")
   const [escaneando, setEscaneando] = useState(false)
+  const [tienda, setTienda] = useState(null)
+  const [tiendas, setTiendas] = useState([])
+  const [cargandoTiendas, setCargandoTiendas] = useState(true)
+  const [errorTiendas, setErrorTiendas] = useState("")
+  const [inicioListo, setInicioListo] = useState(false)
   const inputRef = useRef(null)
+
+  useEffect(() => {
+    const guardada = window.localStorage.getItem(TIENDA_STORAGE_KEY)
+    if (guardada) {
+      try {
+        const tiendaGuardada = JSON.parse(guardada)
+        if (tiendaGuardada?.id && tiendaGuardada?.descripcion) {
+          setTienda(tiendaGuardada)
+          setInicioListo(true)
+          setCargandoTiendas(false)
+          return
+        }
+      } catch {
+        window.localStorage.removeItem(TIENDA_STORAGE_KEY)
+      }
+    }
+
+    cargarTiendas()
+  }, [])
+
+  async function cargarTiendas() {
+    setCargandoTiendas(true)
+    setErrorTiendas("")
+
+    try {
+      const res = await fetch("/api/tiendas")
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "No se pudieron cargar las tiendas")
+
+      setTiendas(data.tiendas || [])
+      setInicioListo(true)
+    } catch (err) {
+      setErrorTiendas(err.message || "No se pudieron cargar las tiendas")
+      setInicioListo(true)
+    } finally {
+      setCargandoTiendas(false)
+    }
+  }
+
+  function elegirTienda(tiendaElegida) {
+    const normalizada = {
+      id: Number(tiendaElegida.id),
+      descripcion: tiendaElegida.descripcion,
+    }
+    setTienda(normalizada)
+    window.localStorage.setItem(TIENDA_STORAGE_KEY, JSON.stringify(normalizada))
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function cambiarTienda() {
+    window.localStorage.removeItem(TIENDA_STORAGE_KEY)
+    setTienda(null)
+    setProducto(null)
+    setEstado("idle")
+    setSku("")
+    cargarTiendas()
+  }
 
   async function buscar(skuOverride) {
     const valor = (skuOverride || sku).trim()
     if (!valor) return
+    if (!tienda?.id) {
+      setError("Debes seleccionar una tienda")
+      setEstado("error")
+      return
+    }
 
     setEstado("cargando")
     setProducto(null)
     setError("")
 
     try {
-      const res = await fetch(`/api/precio?sku=${encodeURIComponent(valor)}`)
+      const params = new URLSearchParams({
+        sku: valor,
+        tienda: String(tienda.id),
+      })
+      const res = await fetch(`/api/precio?${params.toString()}`)
       const data = await res.json()
 
       if (res.ok) {
@@ -125,81 +396,113 @@ export default function Home() {
           </div>
         </header>
 
-        <main style={styles.main}>
-          <div style={styles.inputWrap}>
-            <label style={styles.inputLabel} htmlFor="sku-input">
-              Ingresa o escanea el codigo
-            </label>
-
-            <div style={styles.inputRow}>
-              <input
-                id="sku-input"
-                ref={inputRef}
-                style={styles.input}
-                type="tel"
-                inputMode="numeric"
-                placeholder="0000000000000"
-                value={sku}
-                onChange={e => setSku(e.target.value.replace(/\D/g, "").slice(0, 13))}
-                onKeyDown={onKeyDown}
-                autoFocus
-                autoComplete="off"
-              />
-              <button
-                style={styles.btnCamara}
-                onClick={() => setEscaneando(true)}
-                title="Escanear codigo de barras"
-                aria-label="Abrir camara para escanear"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                  <circle cx="12" cy="13" r="4" />
-                </svg>
-              </button>
-              <button
-                style={{
-                  ...styles.btnBuscar,
-                  ...(estado === "cargando" ? styles.btnDisabled : {}),
-                }}
-                onClick={() => buscar()}
-                disabled={estado === "cargando"}
-              >
-                {estado === "cargando" ? "..." : ">"}
-              </button>
-            </div>
-
-            <p style={styles.hint}>
-              {sku.length > 0
-                ? `${sku.length} / 13 digitos`
-                : "EAN-13 completo o los primeros 12 digitos"}
-            </p>
-          </div>
-
-          {estado === "cargando" && (
+        {!inicioListo && (
+          <main style={styles.main}>
             <div style={styles.estadoBloque}>
               <span style={styles.spinner} />
-              <span style={styles.estadoTexto}>consultando...</span>
+              <span style={styles.estadoTexto}>iniciando...</span>
             </div>
-          )}
+          </main>
+        )}
 
-          {estado === "error" && (
-            <div style={styles.errorBloque}>
-              <span style={styles.errorIcon}>x</span>
-              <p style={styles.errorTexto}>{error}</p>
-              <button style={styles.btnLimpiar} onClick={limpiar}>Nueva consulta</button>
+        {inicioListo && !tienda && (
+          <SelectorTienda
+            tiendas={tiendas}
+            cargando={cargandoTiendas}
+            error={errorTiendas}
+            tiendaElegida={tienda}
+            onElegir={elegirTienda}
+            onRecargar={cargarTiendas}
+          />
+        )}
+
+        {inicioListo && tienda && (
+          <main style={styles.main}>
+            <div style={styles.tiendaActiva}>
+              <div>
+                <span style={styles.tiendaLabel}>Tienda</span>
+                <p style={styles.tiendaNombre}>{tienda.descripcion}</p>
+              </div>
+              <button style={styles.btnCambiarTienda} onClick={cambiarTienda}>
+                Cambiar
+              </button>
             </div>
-          )}
 
-          {estado === "ok" && producto && (
-            <>
-              <TarjetaProducto producto={producto} />
-              <button style={styles.btnLimpiar} onClick={limpiar}>Nueva consulta</button>
-            </>
-          )}
-        </main>
+            <div style={styles.inputWrap}>
+              <label style={styles.inputLabel} htmlFor="sku-input">
+                Ingresa o escanea el codigo
+              </label>
+
+              <div style={styles.inputRow}>
+                <input
+                  id="sku-input"
+                  ref={inputRef}
+                  style={styles.input}
+                  type="tel"
+                  inputMode="numeric"
+                  placeholder="0000000000000"
+                  value={sku}
+                  onChange={e => setSku(e.target.value.replace(/\D/g, "").slice(0, 13))}
+                  onKeyDown={onKeyDown}
+                  autoFocus
+                  autoComplete="off"
+                />
+                <button
+                  style={styles.btnCamara}
+                  onClick={() => setEscaneando(true)}
+                  title="Escanear codigo de barras"
+                  aria-label="Abrir camara para escanear"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                    <circle cx="12" cy="13" r="4" />
+                  </svg>
+                </button>
+                <button
+                  style={{
+                    ...styles.btnBuscar,
+                    ...(estado === "cargando" ? styles.btnDisabled : {}),
+                  }}
+                  onClick={() => buscar()}
+                  disabled={estado === "cargando"}
+                >
+                  {estado === "cargando" ? "..." : ">"}
+                </button>
+              </div>
+
+              <p style={styles.hint}>
+                {sku.length > 0
+                  ? `${sku.length} / 13 digitos`
+                  : "EAN-13 completo o los primeros 12 digitos"}
+              </p>
+            </div>
+
+            {estado === "cargando" && (
+              <div style={styles.estadoBloque}>
+                <span style={styles.spinner} />
+                <span style={styles.estadoTexto}>consultando...</span>
+              </div>
+            )}
+
+            {estado === "error" && (
+              <div style={styles.errorBloque}>
+                <span style={styles.errorIcon}>x</span>
+                <p style={styles.errorTexto}>{error}</p>
+                <button style={styles.btnLimpiar} onClick={limpiar}>Nueva consulta</button>
+              </div>
+            )}
+
+            {estado === "ok" && producto && (
+              <>
+                <TarjetaProducto producto={producto} tienda={tienda} />
+                <button style={styles.btnLimpiar} onClick={limpiar}>Nueva consulta</button>
+              </>
+            )}
+          </main>
+        )}
 
         <footer style={styles.footer}>
-          <span>consulta en tiempo real - api ripley</span>
+          <span>consulta en tiempo real - Dino - 2026</span>
         </footer>
 
         {escaneando && (
@@ -215,7 +518,7 @@ export default function Home() {
           to { transform: rotate(360deg); }
         }
         input::placeholder { color: #333; }
-        input:focus { outline: none; border-color: var(--accent) !important; }
+        input:focus, select:focus { outline: none; border-color: var(--accent) !important; }
         button:active { opacity: 0.7; }
       `}</style>
     </>
@@ -263,10 +566,76 @@ const styles = {
   },
   main: {
     flex: 1,
-    padding: "32px 24px",
+    padding: "24px",
     display: "flex",
     flexDirection: "column",
-    gap: 24,
+    gap: 22,
+  },
+  welcomeMain: {
+    flex: 1,
+    padding: "32px 24px",
+    display: "flex",
+    alignItems: "center",
+  },
+  welcomeBox: {
+    width: "100%",
+    display: "flex",
+    flexDirection: "column",
+    gap: 18,
+  },
+  welcomeEyebrow: {
+    fontFamily: "var(--mono)",
+    fontSize: 11,
+    letterSpacing: 2,
+    color: "var(--accent)",
+    textTransform: "uppercase",
+  },
+  welcomeTitle: {
+    fontFamily: "var(--sans)",
+    fontWeight: 600,
+    fontSize: 34,
+    color: "var(--text)",
+  },
+  welcomeText: {
+    fontFamily: "var(--sans)",
+    fontSize: 17,
+    color: "var(--muted)",
+    lineHeight: 1.4,
+  },
+  tiendaActiva: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    padding: "12px 14px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  tiendaLabel: {
+    fontFamily: "var(--mono)",
+    fontSize: 9,
+    letterSpacing: 2,
+    color: "var(--muted)",
+    textTransform: "uppercase",
+  },
+  tiendaNombre: {
+    fontFamily: "var(--mono)",
+    fontSize: 14,
+    color: "var(--text)",
+  },
+  btnCambiarTienda: {
+    background: "transparent",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--accent)",
+    fontFamily: "var(--mono)",
+    fontSize: 11,
+    letterSpacing: 1,
+    padding: "8px 10px",
+    cursor: "pointer",
+    textTransform: "uppercase",
+    flexShrink: 0,
   },
   inputWrap: {
     display: "flex",
@@ -480,6 +849,152 @@ const styles = {
     fontSize: 14,
     letterSpacing: 2,
     color: "var(--text)",
+  },
+  popBloque: {
+    borderTop: "1px solid var(--border)",
+    padding: 16,
+  },
+  btnPop: {
+    width: "100%",
+    background: "var(--accent)",
+    border: "none",
+    borderRadius: 4,
+    color: "#000",
+    fontFamily: "var(--mono)",
+    fontWeight: 600,
+    fontSize: 12,
+    letterSpacing: 2,
+    padding: "13px",
+    cursor: "pointer",
+  },
+  popForm: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  formGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 104px",
+    gap: 10,
+  },
+  field: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  fieldLabel: {
+    fontFamily: "var(--mono)",
+    fontSize: 10,
+    letterSpacing: 2,
+    color: "var(--muted)",
+    textTransform: "uppercase",
+  },
+  select: {
+    width: "100%",
+    background: "#0d0d0d",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--text)",
+    fontFamily: "var(--mono)",
+    fontSize: 14,
+    padding: "11px 10px",
+  },
+  selectGrande: {
+    width: "100%",
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--text)",
+    fontFamily: "var(--mono)",
+    fontSize: 16,
+    padding: "14px 12px",
+  },
+  cantidadInput: {
+    width: "100%",
+    background: "#0d0d0d",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--text)",
+    fontFamily: "var(--mono)",
+    fontSize: 16,
+    padding: "10px",
+  },
+  comentarioInput: {
+    width: "100%",
+    background: "#0d0d0d",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--text)",
+    fontFamily: "var(--sans)",
+    fontSize: 15,
+    padding: "11px 10px",
+  },
+  contadorComentario: {
+    alignSelf: "flex-end",
+    fontFamily: "var(--mono)",
+    fontSize: 10,
+    color: "var(--muted)",
+  },
+  errorSolicitud: {
+    fontFamily: "var(--mono)",
+    fontSize: 12,
+    color: "#ff8080",
+  },
+  formActions: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  },
+  btnSecundario: {
+    background: "transparent",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--muted)",
+    fontFamily: "var(--mono)",
+    fontSize: 11,
+    letterSpacing: 2,
+    padding: "12px",
+    cursor: "pointer",
+    textTransform: "uppercase",
+  },
+  btnConfirmarPop: {
+    background: "var(--accent)",
+    border: "none",
+    borderRadius: 4,
+    color: "#000",
+    fontFamily: "var(--mono)",
+    fontWeight: 600,
+    fontSize: 11,
+    letterSpacing: 2,
+    padding: "12px",
+    cursor: "pointer",
+    textTransform: "uppercase",
+  },
+  solicitudOk: {
+    background: "#0f1f18",
+    border: "1px solid #1f5c46",
+    borderRadius: 4,
+    color: "var(--accent)",
+    fontFamily: "var(--mono)",
+    fontSize: 12,
+    letterSpacing: 1,
+    padding: "12px",
+    textAlign: "center",
+    textTransform: "uppercase",
+  },
+  btnEntrar: {
+    width: "100%",
+    background: "var(--accent)",
+    border: "none",
+    borderRadius: 4,
+    color: "#000",
+    fontFamily: "var(--mono)",
+    fontWeight: 600,
+    fontSize: 13,
+    letterSpacing: 2,
+    padding: "14px",
+    cursor: "pointer",
+    textTransform: "uppercase",
   },
   btnLimpiar: {
     background: "transparent",
